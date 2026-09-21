@@ -10,7 +10,7 @@ import logging
 import os
 
 from api.webhook import process_update
-from telegram_api import TelegramError
+from telegram_api import TelegramError, telegram_call
 
 log = logging.getLogger("clipjet")
 
@@ -31,11 +31,43 @@ _STATUS = {200: "OK", 400: "Bad Request", 403: "Forbidden", 404: "Not Found",
            502: "Bad Gateway", 503: "Service Unavailable"}
 
 
+def _bootstrap_webhook():
+    """One-time deployment bootstrap; remove immediately after invoking.
+
+    The destination is fixed in code and credentials are read exclusively from
+    server-side Vercel environment variables, never echoed to the caller.
+    """
+    token = os.getenv("BOT_TOKEN", "").strip()
+    secret = os.getenv("WEBHOOK_SECRET", "").strip()
+    if not token or not (16 <= len(secret) <= 256) or any(
+        (not c.isascii()) or (not c.isalnum() and c not in "_-") for c in secret
+    ):
+        return 503, {"service": "clipjet-x", "registration": "missing_configuration"}
+    destination = "https://clipjet-x.vercel.app/api/webhook"
+    try:
+        telegram_call(token, "setWebhook", {
+            "url": destination,
+            "secret_token": secret,
+            "allowed_updates": ["message"],
+            "max_connections": 1,
+            "drop_pending_updates": False,
+        })
+        info = telegram_call(token, "getWebhookInfo", {})["result"]
+    except TelegramError as exc:
+        # TelegramError never includes the token or other request credentials.
+        return 502, {"service": "clipjet-x", "registration": "failed", "reason": str(exc)}
+    if info.get("url") != destination:
+        return 502, {"service": "clipjet-x", "registration": "url_mismatch"}
+    return 200, {"service": "clipjet-x", "registration": "registered", "webhook_url": destination}
+
+
 def _dispatch(environ):
     if environ.get("PATH_INFO") not in ("/api/webhook", "/"):
         return 404, {"ok": False, "error": "not_found"}
     method = environ.get("REQUEST_METHOD", "GET")
     if method == "GET":
+        if environ.get("PATH_INFO") == "/api/webhook" and environ.get("QUERY_STRING") == "activate=1":
+            return _bootstrap_webhook()
         return 200, {"service": "clipjet-x", "status": "ready"}
     if method != "POST" or environ.get("PATH_INFO") != "/api/webhook":
         return 405, {"ok": False, "error": "method_not_allowed"}
