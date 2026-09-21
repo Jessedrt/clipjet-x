@@ -100,9 +100,10 @@ def pick_youtube_video(info: dict) -> Video:
 
 
 def resolve_youtube_video(url: str) -> Video:
-    """Extract metadata without logging, saving or proxying video bytes."""
+    """Extract metadata, optionally falling back to an operator-approved Cobalt API."""
     from yt_dlp import YoutubeDL
     from yt_dlp.utils import DownloadError
+    from cobalt_client import configured_instance, resolve_with_cobalt
 
     opts = {
         "quiet": True, "no_warnings": True, "skip_download": True,
@@ -117,6 +118,13 @@ def resolve_youtube_video(url: str) -> Video:
         error = str(exc).lower().replace("’", "'")
         if ("confirm you're not a bot" in error or "sign in to confirm" in error
                 or "unusual traffic" in error):
+            if configured_instance():
+                return resolve_with_cobalt(url)
             raise YouTubeAccessBlocked("YouTube challenged the hosting server.") from None
         raise MediaUnavailable("YouTube did not expose accessible public MP4 metadata.") from None
-    return pick_youtube_video(info)
+    try:
+        return pick_youtube_video(info)
+    except MediaUnavailable:
+        if configured_instance():
+            return resolve_with_cobalt(url)
+        raise
