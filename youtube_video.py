@@ -15,6 +15,10 @@ YOUTUBE_HOSTS = frozenset({"youtube.com", "www.youtube.com", "m.youtube.com", "m
 SHORT_HOSTS = frozenset({"youtu.be", "www.youtu.be"})
 
 
+class YouTubeAccessBlocked(MediaUnavailable):
+    """YouTube required human verification or blocked this server's traffic."""
+
+
 def canonical_youtube_video(raw: str) -> str:
     """Only single-video public URL forms; never follow arbitrary URLs."""
     if not isinstance(raw, str) or not raw or len(raw) > 2048 or any(c.isspace() or c == "\\" for c in raw):
@@ -96,7 +100,7 @@ def pick_youtube_video(info: dict) -> Video:
 
 
 def resolve_youtube_video(url: str) -> Video:
-    """Extract only metadata, never log, save or proxy any video bytes."""
+    """Extract metadata without logging, saving or proxying video bytes."""
     from yt_dlp import YoutubeDL
     from yt_dlp.utils import DownloadError
 
@@ -109,5 +113,10 @@ def resolve_youtube_video(url: str) -> Video:
         with YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
     except DownloadError as exc:
-        raise MediaUnavailable("YouTube did not expose accessible public MP4 metadata.") from exc
+        # Do not echo yt-dlp's raw error: it may contain URLs, video IDs or account instructions.
+        error = str(exc).lower().replace("’", "'")
+        if ("confirm you're not a bot" in error or "sign in to confirm" in error
+                or "unusual traffic" in error):
+            raise YouTubeAccessBlocked("YouTube challenged the hosting server.") from None
+        raise MediaUnavailable("YouTube did not expose accessible public MP4 metadata.") from None
     return pick_youtube_video(info)
