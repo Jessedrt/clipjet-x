@@ -62,12 +62,12 @@ def _bootstrap_webhook():
 
 
 def _dispatch(environ):
+    method = environ.get("REQUEST_METHOD", "GET")
+    if method == "GET" and environ.get("PATH_INFO") == "/api/activate":
+        return _bootstrap_webhook()
     if environ.get("PATH_INFO") not in ("/api/webhook", "/"):
         return 404, {"ok": False, "error": "not_found"}
-    method = environ.get("REQUEST_METHOD", "GET")
     if method == "GET":
-        if environ.get("QUERY_STRING") == "activate=1":
-            return _bootstrap_webhook()
         return 200, {"service": "clipjet-x", "status": "ready"}
     if method != "POST" or environ.get("PATH_INFO") != "/api/webhook":
         return 405, {"ok": False, "error": "method_not_allowed"}
