@@ -1,2 +1,11 @@
+[project]
+name = "clipjet-x"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "yt-dlp>=2026.1.1,<2027",
+    "python-dotenv>=1.0,<2",
+]
+
 [tool.vercel]
 entrypoint = "app:app"
