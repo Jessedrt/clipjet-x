@@ -12,6 +12,7 @@ from time import monotonic
 
 from clipjet import InvalidLink, MediaUnavailable, canonical_x_post, resolve_x_video
 from cobalt_client import CobaltUnavailable
+from socialkit_client import SocialKitUnavailable
 from youtube_video import YouTubeAccessBlocked, canonical_youtube_video, resolve_youtube_video
 from telegram_api import TelegramError, telegram_call
 
@@ -88,6 +89,14 @@ def process_update(update: dict, token: str) -> None:
     telegram_call(token, "sendMessage", {"chat_id": chat_id, "text": f"🔎 Checking the public {source} video…"})
     try:
         video = resolver(url)
+    except SocialKitUnavailable:
+        telegram_call(token, "sendMessage", {
+            "chat_id": chat_id,
+            "text": "The optional SocialKit API did not deliver a compatible MP4. Check your "
+                    "account credits and API settings. Its short-video API has a 10 MB limit. "
+                    "Please don't send account keys or passwords here.",
+        })
+        return
     except CobaltUnavailable:
         telegram_call(token, "sendMessage", {
             "chat_id": chat_id,
