@@ -1,4 +1,4 @@
-"""Vercel Python function: Telegram webhook for ClipJet X-only MVP."""
+"""Telegram webhook for ClipJet X and best-effort authorized YouTube media."""
 from __future__ import annotations
 
 from collections import deque
@@ -11,6 +11,7 @@ from threading import Lock
 from time import monotonic
 
 from clipjet import InvalidLink, MediaUnavailable, canonical_x_post, resolve_x_video
+from youtube_video import canonical_youtube_video, resolve_youtube_video
 from telegram_api import TelegramError, telegram_call
 
 log = logging.getLogger("clipjet")
@@ -21,7 +22,7 @@ _lock = Lock()
 
 
 def duplicate_or_throttled(update_id: int, user_id: int) -> str | None:
-    """Best-effort per-instance protection, NOT durable or globally shared."""
+    """Best-effort per-instance protection; not durable or globally shared."""
     with _lock:
         if update_id in _seen_set:
             return "duplicate"
@@ -57,28 +58,48 @@ def process_update(update: dict, token: str) -> None:
         return
     command = text.split(maxsplit=1)[0].split("@", 1)[0].lower() if text.strip() else ""
     if command in {"/start", "/help"}:
-        telegram_call(token, "sendMessage", {"chat_id": chat_id, "text": "🎬 ClipJet X — send ONE public X/Twitter post URL containing a video. I can try a small direct MP4. Only download media you're authorized to use. Private/restricted posts aren't supported."})
+        telegram_call(token, "sendMessage", {
+            "chat_id": chat_id,
+            "text": "🎬 ClipJet — send ONE public X/Twitter or YouTube video link (regular video or Shorts). "
+                    "I'll try to deliver a small MP4. Only request media you're authorized to save; "
+                    "private, protected, and restricted videos aren't supported.",
+        })
         return
     try:
         url = canonical_x_post(text.strip())
-    except InvalidLink as exc:
-        telegram_call(token, "sendMessage", {"chat_id": chat_id, "text": str(exc)})
-        return
+        resolver, source = resolve_x_video, "X"
+    except InvalidLink:
+        try:
+            url = canonical_youtube_video(text.strip())
+            resolver, source = resolve_youtube_video, "YouTube"
+        except InvalidLink:
+            telegram_call(token, "sendMessage", {
+                "chat_id": chat_id,
+                "text": "Please send exactly one valid HTTPS X post or YouTube video/Shorts link.",
+            })
+            return
     state = duplicate_or_throttled(update.get("update_id", -1), user_id)
     if state == "duplicate":
         return
     if state == "cooldown":
         telegram_call(token, "sendMessage", {"chat_id": chat_id, "text": "Please wait 20 seconds between requests."})
         return
-    telegram_call(token, "sendMessage", {"chat_id": chat_id, "text": "🔎 Checking the public X video…"})
+    telegram_call(token, "sendMessage", {"chat_id": chat_id, "text": f"🔎 Checking the public {source} video…"})
     try:
-        video = resolve_x_video(url)
+        video = resolver(url)
     except MediaUnavailable:
-        telegram_call(token, "sendMessage", {"chat_id": chat_id, "text": "I couldn't find a suitable public MP4. The post might be restricted, X may block extraction, or the video may exceed the small-file limit."})
+        telegram_call(token, "sendMessage", {
+            "chat_id": chat_id,
+            "text": f"I couldn't find a small public {source} MP4 with audio. It may be restricted, "
+                    "the site may block extraction, or the video may exceed Telegram's URL limit.",
+        })
         return
     except Exception:
-        log.exception("Metadata extraction failed (URL and token not logged)")
-        telegram_call(token, "sendMessage", {"chat_id": chat_id, "text": "X video lookup failed temporarily. Please try again later."})
+        log.exception("Video metadata extraction failed (URL and token not logged)")
+        telegram_call(token, "sendMessage", {
+            "chat_id": chat_id,
+            "text": f"{source} video lookup failed temporarily. Please try again later.",
+        })
         return
     try:
         telegram_call(token, "sendVideo", {
@@ -89,7 +110,11 @@ def process_update(update: dict, token: str) -> None:
         }, timeout=18)
     except TelegramError:
         log.warning("Telegram could not fetch selected remote MP4")
-        telegram_call(token, "sendMessage", {"chat_id": chat_id, "text": "Telegram couldn't fetch that video directly. It may be too large, expired, or blocked. Try a different public post."})
+        telegram_call(token, "sendMessage", {
+            "chat_id": chat_id,
+            "text": "Telegram couldn't fetch that video directly. It may be too large, expired, or blocked. "
+                    "Try a shorter public video you have permission to save.",
+        })
 
 
 class handler(BaseHTTPRequestHandler):
@@ -131,7 +156,6 @@ class handler(BaseHTTPRequestHandler):
         try:
             process_update(update, token)
         except TelegramError:
-            # Telegram retries non-2xx; best-effort in-memory de-dup is not durable.
             log.error("Telegram API action failed")
             self._json(502, {"ok": False})
             return
