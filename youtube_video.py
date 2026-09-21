@@ -1,7 +1,7 @@
-"""Conservative YouTube URL validation and metadata-only progressive MP4 selection.
+"""Conservative YouTube URL validation and metadata-only MP4 selection.
 
-Telegram fetches the media URL; Vercel never downloads the video. Availability
-is best-effort: YouTube may require JS challenges or reject Telegram's fetch.
+Telegram fetches media directly. Optional external providers require explicit
+operator configuration; ClipJet never saves, proxies or uploads video bytes.
 """
 from __future__ import annotations
 
@@ -99,11 +99,26 @@ def pick_youtube_video(info: dict) -> Video:
     return Video(url=suitable[0][-1], caption=title or "YouTube video")
 
 
+def _optional_provider(url: str, original_error: MediaUnavailable) -> Video:
+    """Prefer explicitly enabled SocialKit, retain any approved Cobalt fallback."""
+    from socialkit_client import SocialKitUnavailable, is_enabled, resolve_with_socialkit
+    from cobalt_client import configured_instance, resolve_with_cobalt
+
+    if is_enabled():
+        try:
+            return resolve_with_socialkit(url)
+        except SocialKitUnavailable:
+            if not configured_instance():
+                raise
+    if configured_instance():
+        return resolve_with_cobalt(url)
+    raise original_error
+
+
 def resolve_youtube_video(url: str) -> Video:
-    """Extract metadata, optionally falling back to an operator-approved Cobalt API."""
+    """Extract public metadata, optionally trying configured alternative APIs."""
     from yt_dlp import YoutubeDL
     from yt_dlp.utils import DownloadError
-    from cobalt_client import configured_instance, resolve_with_cobalt
 
     opts = {
         "quiet": True, "no_warnings": True, "skip_download": True,
@@ -114,17 +129,13 @@ def resolve_youtube_video(url: str) -> Video:
         with YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
     except DownloadError as exc:
-        # Do not echo yt-dlp's raw error: it may contain URLs, video IDs or account instructions.
+        # Do not expose yt-dlp's raw error: it can include URLs and account instructions.
         error = str(exc).lower().replace("’", "'")
         if ("confirm you're not a bot" in error or "sign in to confirm" in error
                 or "unusual traffic" in error):
-            if configured_instance():
-                return resolve_with_cobalt(url)
-            raise YouTubeAccessBlocked("YouTube challenged the hosting server.") from None
+            return _optional_provider(url, YouTubeAccessBlocked("YouTube challenged the hosting server."))
         raise MediaUnavailable("YouTube did not expose accessible public MP4 metadata.") from None
     try:
         return pick_youtube_video(info)
     except MediaUnavailable:
-        if configured_instance():
-            return resolve_with_cobalt(url)
-        raise
+        return _optional_provider(url, MediaUnavailable("No suitable small YouTube MP4 available."))
