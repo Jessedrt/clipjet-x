@@ -11,6 +11,7 @@ from threading import Lock
 from time import monotonic
 
 from clipjet import InvalidLink, MediaUnavailable, canonical_x_post, resolve_x_video
+from cobalt_client import CobaltUnavailable
 from youtube_video import YouTubeAccessBlocked, canonical_youtube_video, resolve_youtube_video
 from telegram_api import TelegramError, telegram_call
 
@@ -87,6 +88,14 @@ def process_update(update: dict, token: str) -> None:
     telegram_call(token, "sendMessage", {"chat_id": chat_id, "text": f"🔎 Checking the public {source} video…"})
     try:
         video = resolver(url)
+    except CobaltUnavailable:
+        telegram_call(token, "sendMessage", {
+            "chat_id": chat_id,
+            "text": "The alternative media API couldn't return a compatible MP4. Check that your "
+                    "authorized Cobalt instance is running and configured; YouTube may also "
+                    "block its requests. Don't send me API keys, cookies or passwords.",
+        })
+        return
     except YouTubeAccessBlocked:
         telegram_call(token, "sendMessage", {
             "chat_id": chat_id,
