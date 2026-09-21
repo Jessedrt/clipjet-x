@@ -11,7 +11,7 @@ from threading import Lock
 from time import monotonic
 
 from clipjet import InvalidLink, MediaUnavailable, canonical_x_post, resolve_x_video
-from youtube_video import canonical_youtube_video, resolve_youtube_video
+from youtube_video import YouTubeAccessBlocked, canonical_youtube_video, resolve_youtube_video
 from telegram_api import TelegramError, telegram_call
 
 log = logging.getLogger("clipjet")
@@ -87,6 +87,14 @@ def process_update(update: dict, token: str) -> None:
     telegram_call(token, "sendMessage", {"chat_id": chat_id, "text": f"🔎 Checking the public {source} video…"})
     try:
         video = resolver(url)
+    except YouTubeAccessBlocked:
+        telegram_call(token, "sendMessage", {
+            "chat_id": chat_id,
+            "text": "YouTube is asking our hosting server to prove it's not a bot, so I can't fetch "
+                    "this video right now. Your link isn't necessarily broken and this isn't a "
+                    "file-size error. Please don't send me account passwords or browser cookies.",
+        })
+        return
     except MediaUnavailable:
         telegram_call(token, "sendMessage", {
             "chat_id": chat_id,
